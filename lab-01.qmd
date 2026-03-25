@@ -181,7 +181,7 @@ dayDiff <- wide_raw %>%
   select(`Colorado R at Glenwood Springs_flow_delta`:`Colorado R below Hoover Dam_flow_delta`)
 
 # flip back to long, filter to top 5
-dayFlow <- pivot_longer(dayFlow, cols = colnames(dayFlow), names_to="name", values_to = 'Flow (cfs)') %>%
+dayFlow <- pivot_longer(dayFlow, cols = colnames(dayFlow), names_to="Name", values_to = 'Flow (cfs)') %>%
   arrange(desc(`Flow (cfs)`))
 dayFlow <- dayFlow[1:5, ]
 
@@ -190,9 +190,12 @@ dayFlow <- dayFlow[1:5, ]
 dayDiff <- dayDiff %>%
   rename_with(~ gsub("_flow_delta", "", .x))
 # flip back to long, filter to top 5
-dayDiff <- pivot_longer(dayDiff, cols = colnames(dayDiff), names_to="name", values_to = 'Delta Flow (cfs)') %>%
+dayDiff <- pivot_longer(dayDiff, cols = colnames(dayDiff), names_to="Name", values_to = 'Delta Flow (cfs)') %>%
   arrange(desc(`Delta Flow (cfs)`))
 dayDiff <- dayDiff[1:5, ]
+
+dayFlow$Rank <- rank(-dayFlow$`Flow (cfs)`)
+dayDiff$Rank <- rank(-dayDiff$`Delta Flow (cfs)`) 
 
 
 table1 <- flextable(dayFlow)
@@ -221,7 +224,7 @@ Before writing a single `_join()` call, answer three questions:
 1. **What is the key?** Which column connects the two tables?
 Probably the gage ID
 2. **What is the relationship?** One-to-one, or one-to-many?
-one-to-one
+one-to-one for gauges, one-to-many for raw
 3. **What happens to non-matching rows?** Keep them (with NAs), or drop them?
 Keep them
 
@@ -281,6 +284,7 @@ gauges <- left_join(gauges, site_meta, by="site_no")
 # student: join metadata to flow records
 # e.g., flow_meta <- raw |> left_join(site_meta, by = "site_no")
 # then run the verification checks below
+flow_meta <- left_join(raw, site_meta, by='site_no')
 ```
 
 **c.** Verify the join — this step is not optional:
@@ -289,7 +293,7 @@ gauges <- left_join(gauges, site_meta, by="site_no")
 #| eval: false
 # Check 1: row count must be unchanged
 # FALSE means rows were gained (duplicate key) or lost (wrong join type)
-nrow(flow_meta) == nrow(flow)
+nrow(flow_meta) == nrow(raw)
 
 # Check 2: no unexpected NAs in the joined column
 flow_meta |>
@@ -342,7 +346,7 @@ Lees Ferry's high discharge reflects its enormous watershed, not necessarily mor
 **a.** Add a `flow_per_sqmi` column: `flow_per_sqmi = Flow / drain_area_va`.
 
 ```{r}
-
+flow_meta$flow_per_sqmi <- flow_meta$Flow / flow_meta$drain_area_va
 ```
 
 **b.** On `my.date`, build a flextable showing **both raw and normalized rankings** side by side for all 7 gauges. Include columns for gauge name, raw discharge (cfs), drainage area (mi²), normalized flow (cfs/mi²), raw rank, and normalized rank. Sort by raw rank.
@@ -353,6 +357,13 @@ Hint: create ranking columns with `rank()` (e.g., `raw_rank = rank(-Flow)` and `
 :::
 
 ```{r}
+flow_meta$raw_rank <- rank(-flow_meta$Flow)
+flow_meta$rank <- rank(-flow_meta$flow_per_sqmi)
+
+flowday <- flow_meta |>
+  filter(Date == my.date) |>
+  select(name, Flow, flow_per_sqmi, drain_area_va)
+
 
 ```
 
