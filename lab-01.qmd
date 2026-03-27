@@ -357,17 +357,26 @@ Hint: create ranking columns with `rank()` (e.g., `raw_rank = rank(-Flow)` and `
 :::
 
 ```{r}
-flow_meta$raw_rank <- rank(-flow_meta$Flow)
-flow_meta$rank <- rank(-flow_meta$flow_per_sqmi)
 
+flow_meta$flow_per_sqmi <- round(flow_meta$flow_per_sqmi, digits=3)
 flowday <- flow_meta |>
-  filter(Date == my.date) |>
-  select(name, Flow, flow_per_sqmi, drain_area_va)
+  filter(Date == my.date)
+flowday$raw_rank <- rank(-flowday$Flow)
+flowday$rank <- rank(-flowday$flow_per_sqmi)
 
+flowday <- flowday |>
+  select(name, Flow, flow_per_sqmi, drain_area_va, raw_rank, rank) |>
+  rename(`Flow (cfs)` = Flow,
+         `Normalized flow (cfs/sqmi)` = flow_per_sqmi,
+         `Drainage Area (sqmi)` = drain_area_va) |>
+  arrange(raw_rank)
 
+flextable(flowday)
 ```
 
 **c.** Answer in 2–3 sentences: (1) do the raw and normalized rankings differ, and if so, which gauge changes most dramatically? (2) Why does per-area normalization matter for comparing gauges in the Colorado Basin? (3) Name one analysis where you would use raw discharge and one where you would use normalized discharge.
+
+The raw and normalized flow differs dramatically because the lower Colorado basin is far more arid than the upper basin. The raw flow below the Hoover Dam is very high, but normalized by the basin's size it is the smallest of our basins. Raw discharge would be appropriate for a study estimating water resource allocation of a specific river. Normalized discharge allows you to compare precipitation and runoff generation efficiency across many basins of different sizes.
 
 > ...
 
@@ -384,6 +393,13 @@ The USGS computes official low-flow statistics — including the 7Q10 — and ma
 **a.** For each gauge, compute the **7-day rolling mean** of daily discharge. Use `zoo::rollmean()` with `fill = NA` and `align = "right"` so each value represents the average of the current and 6 preceding days.
 
 ```{r}
+# a better solution than making it pivot wide...
+flow_meta <- flow_meta |>
+  group_by(name) |>
+  mutate(
+    sevenday = rollmean(Flow, k = 7, fill = NA, align = 'right')
+  ) |>
+  ungroup()
 
 ```
 
@@ -394,6 +410,13 @@ Instructor-only: an hourly (8-hour) `zoo::rollmean()` example has been moved to 
 **b.** Define a **low-flow threshold** for each gauge as the 10th percentile of its historical discharge during **1980–2010**. A flow that is critically low for Lees Ferry might be above average for the Little Colorado — thresholds must be site-specific.
 
 ```{r}
+flow_meta <- flow_meta |>
+  group_by(name) |>
+  mutate(p10 = quantile(Flow, probs=0.1, na.rm=TRUE)) |>
+  mutate(
+    low = ifelse(Flow<p10, TRUE, FALSE)
+  ) |>
+  ungroup()
 
 ```
 
