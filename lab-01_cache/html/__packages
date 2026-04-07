@@ -1,3 +1,10 @@
+base
+methods
+datasets
+utils
+grDevices
+graphics
+stats
 tidyverse
 ggplot2
 tibble
@@ -13,4 +20,3 @@ zoo
 patchwork
 flextable
 broom
-tsibble

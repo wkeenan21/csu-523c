@@ -1,0 +1,12 @@
+project:
+  type: website
+  output-dir: /docs
+  render:
+  - "*.qmd"
+
+website:
+  title: "csu-523c"
+  
+author:
+  name: William Keenan
+  email: william.keenan@colostate.edu
