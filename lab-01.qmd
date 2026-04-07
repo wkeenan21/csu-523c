@@ -25,7 +25,6 @@ knitr::opts_chunk$set(
 #| echo: false
 #| fig-align: center
 #| out-width: "100%"
-knitr::include_graphics('img/colorado-river.jpg')
 ```
 
 In January 2023, the federal government announced the first-ever Tier 3 shortage on the Colorado River — triggering mandatory cuts to Arizona, Nevada, and Mexico. Those cuts were calculated from streamflow records like the ones you are about to pull.
@@ -64,6 +63,9 @@ Install and load the following packages. If any are missing, run `install.packag
 #| eval: false
 if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
 
+```
+
+```{r}
 pacman::p_load(
   tidyverse,
   dataRetrieval,
@@ -72,7 +74,8 @@ pacman::p_load(
   flextable,
   lubridate,
   broom,
-  tsibble
+  tsibble,
+  tibble
 )
 ```
 
@@ -95,6 +98,7 @@ The data is already in your hands. Let's use it.
 ```{r}
 #| label: data-pull
 #| cache: true
+#| 
 
 gauges <- tribble(
   ~site_no,     ~name,                           ~state,
@@ -659,7 +663,7 @@ locusT <- locusT[order(locusT$wy), ]
 left <- ggplot(data=locusT, aes(x=lon_w, y=lat_w)) +
   geom_point(aes(color=wy)) +
   scale_color_gradientn(colors = c("blue", "white", "red")) +
-  labs(x='Longitude', y='Latitude', title='Geographic Mean of Q for the Colorado, San Juan, White, and L Colorado Rivers')+
+  labs(x='Longitude', y='Latitude', color='Water Year',title='Geographic Mean of Q for the Colorado, San Juan, White, and L Colorado Rivers')+
   theme_minimal()
 
 right <- ggplot(data=locusT, aes(x=wy, y=lat_w)) +
@@ -693,7 +697,7 @@ Make `season` a factor with levels in hydrological order: Snowmelt, Monsoon, Low
 Hint: extract `month` from `Date` with `month()`, create `season` with `case_when()` mapping month ranges to labels, then convert to a factor with explicit level ordering:
 
 ```{r}
-#| eval: false
+
 season <- flow_meta |>
   mutate(
   month = month(Date),
@@ -782,7 +786,6 @@ Then join that back to your Lees Ferry & Glenwood annual table by `water_year`.
 This is your fourth join. **Always verify**: the final dataset should have ~44 rows (one per water year, 1980–2023), zero NAs in flow columns, and log-transformed values should be positive.
 
 ```{r}
-#| eval: false
 dominant_season <- season |>
   filter(site_no == '09380000') |>
   group_by(wy, season) |>
@@ -818,13 +821,8 @@ lees_model_data <- annual |>
 **b.** Fit a linear model predicting `log_lees` from `log_glenwood`, `season`, and their interaction:
 
 ```{r}
-#| eval: false
 mod <- lm(log_lees ~ log_glenwood * season, data = lees_model_data)
 summary(mod)
-```
-
-```{r}
-
 ```
 
 **c.** In 3–4 sentences: (1) report the R² and state whether the overall model is statistically significant, (2) interpret the `log_glenwood` coefficient as an elasticity — what does it mean physically that the coefficient is greater than 1? (3) describe what the significant negative interaction terms tell you about the upstream-downstream relationship outside of Snowmelt season.
@@ -843,12 +841,6 @@ A model that fits well on average can still fail in predictable ways. Two core a
 
 **a.** Use `broom::augment()` to produce a tidy data frame of predictions and residuals alongside the original data:
 
-```{r}
-#| eval: false
-aug <- augment(mod, data = lees_model_data)
-
-
-```
 
 ::: callout-tip
 ## Introducing `broom`
@@ -863,7 +855,7 @@ Together these make model results as pipeable as any other data frame — straig
 :::
 
 ```{r}
-
+aug <- augment(mod, data = lees_model_data)
 ```
 
 **b.** Create a **predicted vs. actual scatter plot**. Add a dashed 1:1 reference line (perfect prediction). Color points by `season`. Identify any point that sits noticeably off the line.
@@ -873,7 +865,7 @@ Together these make model results as pipeable as any other data frame — straig
 :::
 
 ```{r}
-badguess <- quantile(aug$.resid, probs=0.9)
+badguess <- quantile(aug$.resid, probs=0.95)
 aug$outlier <- (aug$.resid > badguess)|(aug$.resid < badguess*-1)
 ggplot(aug, aes(x=log_lees, y=.fitted, color=outlier))+
   geom_point()+
@@ -886,7 +878,7 @@ ggplot(aug, aes(x=log_lees, y=.fitted, color=outlier))+
 ```{r}
 ggplot(data=aug, aes(.resid))+
   geom_histogram()+
-  geom_abline(v=0)+
+  geom_vline(xintercept=0)+
   labs(x='Residuals')
 ```
 
