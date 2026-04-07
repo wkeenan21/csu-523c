@@ -2,8 +2,8 @@
 title: "Lab 2: Distances and Projections"
 subtitle: 'ESS 523c: Environmental Data Science Applications'
 author:
-  - name: Your Name
-    email: your@colostate.edu
+  - name: William Keenan
+    email: william.keenan@colostate.edu
 format: html
 ---
 
