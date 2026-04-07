@@ -31,30 +31,28 @@ pacman::p_load(
 options(tigris_use_cache = TRUE)
 ```
 
-
 # Background
 
 In this lab four main spatial skills are covered:
 
-1. **Building** `sf` objects from R packages and CSV files — Q1
-2. **Manipulating** geometries and coordinate systems — Q2
-3. **Calculating** distances using geometry type selection — Q2
-4. **Visualizing** spatial patterns with `ggplot2`, `gghighlight`, and `ggrepel` — Q3 & Q4
+1.  **Building** `sf` objects from R packages and CSV files — Q1
+2.  **Manipulating** geometries and coordinate systems — Q2
+3.  **Calculating** distances using geometry type selection — Q2
+4.  **Visualizing** spatial patterns with `ggplot2`, `gghighlight`, and `ggrepel` — Q3 & Q4
 
 ::: callout-tip
 ## Why these skills matter for water resources
+
 Computing distance from a point to a boundary is one of the most common operations in spatial hydrology: distance from a gauge to a watershed outlet, distance from a city to the nearest floodplain, distance from a well to the nearest stream. The mechanics are identical regardless of what the features represent — master them here and they transfer everywhere.
 :::
-
-
 
 # **Question 1**: Build Your Spatial Dataset {#q1}
 
 For this lab we need three datasets:
 
-1. CONUS state boundaries (1.1)
-2. North American country boundaries — US, Mexico, Canada (1.2)
-3. All US cities (1.3)
+1.  CONUS state boundaries (1.1)
+2.  North American country boundaries — US, Mexico, Canada (1.2)
+3.  All US cities (1.3)
 
 ## 1.1 Define a Projection
 
@@ -105,7 +103,6 @@ nrow(cities)    # should be ~28,000
 ## 2.1 Distance to US National Border (km)
 
 The national border is the **resolved** outer boundary of all states — internal state lines dissolved, only the coastline and land borders remain.
-
 
 ```{r}
 citiesb <- cities |>
@@ -227,6 +224,7 @@ ggplot() +
     title = "Top 5 Furthest Cities from the National Border",
   )
 ```
+
 All 5 of the furthest cities are in Kansas. This makes sense because Kansas is in the center of the country. The US needs to ensure we deliver enough water to Mexico via the Colorado River. We might use the distance to the border for that purpose.
 
 > ...
@@ -262,6 +260,7 @@ ggplot() +
     title = "Top 5 Furthest Cities from a State Border",
   )
 ```
+
 The pattern is vastly different because there are many state borders within the big national border. The big states in the West have the largest interior areas: Texas, Arizona, Colorado, Montana, Oregon, California, etc. State borders were not drawn with water resources in mind. A hydrologist might use this data to examine which cities may be withdrawing groundwater that is inside another state.
 
 > ...
@@ -304,9 +303,7 @@ ggplot() +
   )
 ```
 
-This zone runs from the Northern California coast to Kansas in a roughly straight line, then cuts south where Canada has a peninsula near the Great Lakes. This zone shows that areas above it are likely more similar in climate to Canada and areas below it are more similar to Mexico. But this is a poor representation of climate, as climate is unrelated to the international borders.
-> ...
-## Real-World Application — The 100-Mile Border Zone {#q4}
+This zone runs from the Northern California coast to Kansas in a roughly straight line, then cuts south where Canada has a peninsula near the Great Lakes. This zone shows that areas above it are likely more similar in climate to Canada and areas below it are more similar to Mexico. But this is a poor representation of climate, as climate is unrelated to the international borders. \> ... \## Real-World Application — The 100-Mile Border Zone {#q4}
 
 ### Background
 
@@ -317,7 +314,6 @@ The American Civil Liberties Union has documented and challenged this policy. Th
 100 miles ≈ **160 kilometers**. Your distance calculations are already in kilometers.
 
 ## 4.1 Quantify the Zone
-
 
 ```{r}
 cities100 <- citiesb |>
@@ -376,7 +372,6 @@ ggplot() +
 
 Repeat the map from 4.2, but instead of the 10 most populous overall, label the **most populous city in each state** that falls within the zone.
 
-
 ```{r}
 top_10_cities <- cities100 |>
   group_by(state_name) |>
@@ -408,13 +403,9 @@ ggplot() +
   )
 ```
 
-36 states have a city within 100 miles of the border. New Mexico is far enough away that it has a city within 100 miles (Las Cruces), but not the most populous city (Albuquerque). The rule is related to Customs and Border Patrol jurisdiction, so it's unlikely to affect environmental monitoring programs.
-> ...
-
-
+36 states have a city within 100 miles of the border. New Mexico is far enough away that it has a city within 100 miles (Las Cruces), but not the most populous city (Albuquerque). The rule is related to Customs and Border Patrol jurisdiction, so it's unlikely to affect environmental monitoring programs. \> ...
 
 ## Interactive Leaflet Exercise — Build an interactive map
-
 
 ```{r}
 miles <- 0.000621371
@@ -424,6 +415,7 @@ cities_leaf <- st_transform(citiesb, 4326)
 cities_leaf$dist_to_border = cities_leaf$dist_to_border * miles
 cities_leaf$dist_to_mexico = cities_leaf$dist_to_mexico * miles
 cities_leaf$dist_to_canada = cities_leaf$dist_to_canada * miles
+cities_leaf$dif_c_m = cities_leaf$dif_c_m * miles
 
 cities_leaf <- cities_leaf |>
   mutate(dist_to_border100 = ifelse(as.numeric(dist_to_border)<100, dist_to_border, NA))
@@ -500,14 +492,14 @@ leaflet(cities_leaf) |>
   addLegend(
     pal = pal1, 
     values = ~as.numeric(dist_to_border),
-    title = "Dist to Border (m)",
+    title = "Dist to Border (miles)",
     position = "bottomright"
   ) |>
 addLegend(
     pal = pal2, 
     # Use the actual column so the legend shows the range of distances in that zone
     values = ~as.numeric(dist_to_border100),
-    title = "100 Mile Zone Dist.",
+    title = "100 Mile Zone (miles)",
     position = "bottomright",
     group = "100 Mile Zone"
   ) |>
@@ -515,7 +507,7 @@ addLegend(
   addLegend(
     pal = pal3, 
     values = ~as.numeric(dif_c_m),
-    title = "Middle Zone",
+    title = "Middle Zone (miles)",
     position = "bottomleft", # Moved to avoid stacking too deep
     group = "Middle Zone"
   ) |>
@@ -523,5 +515,3 @@ addLegend(
 ```
 
 To use Leaflet, all data must be in EPSG:4326. I did not do any filtering, clustering, or simplifying. If I had more time, I would have made some choices to optimize the map, but it seems fast enough during my tests.
-
-
