@@ -1,0 +1,105 @@
+---
+title: "lab4"
+author: "Will Keenan"
+format: html
+---
+
+```{r}
+library(rstac) # STAC API
+library(terra) # Raster Data handling
+library(sf) # Vector data processing
+library(mapview) # Rapid Interactive visualization
+library(AOI)
+library(tidyr)
+library(dplyr)
+
+
+linn <- aoi_get(state = "IA", county = "Linn")
+linn_bbox <- linn |>
+  st_transform(4326) |>
+  st_bbox()
+
+(stac_query <- stac("https://planetarycomputer.microsoft.com/api/stac/v1"))
+bands <- c('coastal', 'blue', 'green', 'red', 'nir08', 'swir16')
+
+scenes <- stac_query |>
+  stac_search(
+    collections = "landsat-c2-l2",
+    bbox = as.numeric(linn_bbox),
+    datetime = "2016-09-26/2016-09-29"
+  ) |>
+  get_request() |>
+  items_fetch()
+
+print(scenes)
+
+signed_scenes <- rstac::items_sign(
+  scenes,
+  rstac::sign_planetary_computer()
+)
+
+```
+
+
+```{r}
+#cwd <- getwd()
+out <- file.path(cwd, 'data/lab4')
+assets_download(signed_scenes, output_dir = out, overwrite = TRUE)
+```
+
+
+```{r}
+ims <- file.path(out, r"(landsat-c2/level-2/standard/oli-tirs/2016/025/031/LC08_L2SP_025031_20160926_20200906_02_T1)")
+                 
+files <- list.files(path = ims, pattern = "\\.TIF$", full.names = TRUE)
+print(files)
+
+im <- rast(files)
+bandnames <- names(im)
+
+# rename bands
+clean_names <- sub(".*_", "", bandnames)
+print(clean_names)
+names(im) <- clean_names
+```
+View images
+
+```{r}
+# true color
+plotRGB(im, r = "B4", g = "B3", b = "B2", stretch = "lin")
+# false color NIR, R, G
+plotRGB(im, r = "B5", g = "B4", b = "B3", stretch = "lin")
+# false color SWIR, NIR, R
+plotRGB(im, r = "B6", g = "B5", b = "B4", stretch = "lin")
+# false color 
+plotRGB(im, r = "B7", g = "B6", b = "B4", stretch = "lin")
+```
+
+True Color images are best for seeing the landscape in a familiar way. It helps us identify objects because we are used to seeing them in RGB. False color 432 images highlight vegetation because NIR is highly reflective in plants.
+False color 654 highlights water features by making them very dark relative to everything else. False color 764 highlights urban infrastructure.
+
+```{r}
+# NDVI
+index <- (im$B5 - im$B4) / (im$B5 + im$B4)
+names(index) <- "NDVI"
+im <- c(im, index)
+# NDWI
+index <- (im$B3 - im$B5) / (im$B3 + im$B5)
+names(index) <- "NDWI"
+im <- c(im, index)
+# MNDWI
+index <- (im$B3 - im$B6) / (im$B3 + im$B6)
+names(index) <- "MNDWI"
+im <- c(im, index)
+# water ratio index
+index <- (im$B4 + im$B3) / (im$B5 + im$B6)
+names(index) <- "WRI"
+im <- c(im, index)
+# simple water index
+index <- 1 / (im$B2 - im$B6)**0.5
+names(index) <- "SWI"
+im <- c(im, index)
+
+# plot them
+colorRampPalette(c("blue", "white", "red"))(256)
+```
