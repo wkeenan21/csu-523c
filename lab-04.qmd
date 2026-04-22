@@ -100,6 +100,35 @@ index <- 1 / (im$B2 - im$B6)**0.5
 names(index) <- "SWI"
 im <- c(im, index)
 
+
+```
+```{r}
 # plot them
-colorRampPalette(c("blue", "white", "red"))(256)
+color <- colorRampPalette(c("blue", "white", "red"))
+plot(im$SWI, col = color(256), main = "SWI")
+plot(im$NDVI, col = color(256), main = "NDVI")
+plot(im$MNDWI, col = color(256), main = "MNDWI")
+plot(im$NDWI, col = color(256), main = "NDWI")
+plot(im$WRI, col = color(256), main = "WRI")
+```
+
+Unlike the other 4 indices, NDVI is designed to highlight vegetation, not water. However, water has a very low NDVI so it's still outlines the river quite well. Out of the 4 water indices, MNDWI does the best job of clearly delineating the river.
+
+```{r}
+NDVIt <- ifel(im$NDVI < 0, 1, 0)
+NDWIt <- ifel(im$NDWI > 0, 1, 0)
+MNDWIt <- ifel(im$MNDWI > 0, 1, 0)
+WRIt <- ifel(im$WRI > 1, 1, 0)
+SWIt <- ifel(im$SWI < 5, 1, 0)
+```
+
+```{r}
+stack <- c(NDVIt, NDWIt, MNDWIt, WRIt, SWIt)
+set.names(stack, c('NDVI', 'NDWI', 'MNDWI', 'WRI', 'SWI'))
+
+plot(stack$NDVI, main='NDVI')
+plot(stack$NDWI, main='NDWI')
+plot(stack$MNDWI, main='MNDWI')
+plot(stack$WRI, main='WRI')
+plot(stack$SWI, main='SWI')
 ```
