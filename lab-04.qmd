@@ -42,9 +42,15 @@ signed_scenes <- rstac::items_sign(
 
 
 ```{r}
-#cwd <- getwd()
+cwd <- getwd()
 out <- file.path(cwd, 'data/lab4')
-assets_download(signed_scenes, output_dir = out, overwrite = TRUE)
+
+if (length(list.files(out)) > 0) {
+  message(out, "' already contains files. Skipping download.")
+} else {
+  message("Directory is empty. Starting download...")
+  assets_download(signed_scenes, output_dir = out, overwrite = FALSE)
+}
 ```
 
 
@@ -96,10 +102,9 @@ index <- (im$B4 + im$B3) / (im$B5 + im$B6)
 names(index) <- "WRI"
 im <- c(im, index)
 # simple water index
-index <- 1 / (im$B2 - im$B6)**0.5
+index <- 1 / ((im$B2 - im$B6)**0.5)
 names(index) <- "SWI"
 im <- c(im, index)
-
 
 ```
 ```{r}
@@ -132,3 +137,60 @@ plot(stack$MNDWI, main='MNDWI')
 plot(stack$WRI, main='WRI')
 plot(stack$SWI, main='SWI')
 ```
+
+MNDWI has the most sensitivity as there are a lot of pixels outside of the main river network. SWI has a lot of NAs. Overall, they all look very similar.
+
+
+```{r}
+# remove SWI because there are so many NAs
+#stack <- subset(stack, "SWI", negate = TRUE)
+
+vals <- values(stack)
+clean_idx <- which(complete.cases(vals))
+k_results <- kmeans(vals[clean_idx, ], centers = 5, iter.max = 100, nstart = 5)
+
+clust_raster <- stack$NDVI
+values(clust_raster) <- NA
+clust_raster[clean_idx] <- k_results$cluster
+
+levels(clust_raster) <- data.frame(ID = 1:5, cluster = paste0("C", 1:5))
+```
+
+```{r}
+plot(clust_raster, main = "K-Means Cluster Map")
+```
+
+```{r}
+ndwi_values <- values(stack$NDWI)
+cluster_values <- values(clust_raster)
+
+flood_tab <- table(ndwi_values, cluster_values)
+
+print(flood_tab)
+
+```
+
+```{r}
+print(paste('flood class:', which.max(flood_tab[2,])))
+class <- which.max(flood_tab[2,])
+
+names(clust_raster) <- "kmeans"
+clust_raster <- ifel(clust_raster==class, 1, 0)
+stack <- c(stack, clust_raster)
+# see which has the most flooded pixels
+NDVI_sum <- global(stack$NDVI, fun = "sum", na.rm = TRUE)
+NDWI_sum <- global(stack$NDWI, fun = "sum", na.rm = TRUE)
+MNDWI_sum <- global(stack$MNDWI, fun = "sum", na.rm = TRUE)
+WRI_sum <- global(stack$WRI, fun = "sum", na.rm = TRUE)
+SWI_sum <- global(stack$SWI, fun = "sum", na.rm = TRUE)
+
+print(paste('Total flooded pixels per index: NDVI:', NDVI_sum, 'NDWI:', NDWI_sum, 'MNDWI:', MNDWI_sum, 'WRI:', WRI_sum, 'SWI:', SWI_sum))
+```
+
+```{r}
+# sum them all up
+sum_floods <- app(stack, fun = sum, na.rm=TRUE)
+plot(sum_floods, col = blues9, main='Sum of each flood mapping raster')
+```
+
+The cells are all integers between 0 and 6, as expected.

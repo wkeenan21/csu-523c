@@ -24,6 +24,7 @@ Install any missing packages with `install.packages("packagename")`, then load:
 
 ```{r}
 #| code-fold: false
+install.packages('rmapshaper')
 pacman::p_load(
   tidyverse, sf, units, tigris, rnaturalearth, gghighlight, ggrepel, flextable, viridis, leaflet
 )
