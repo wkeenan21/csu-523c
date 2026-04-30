@@ -1,5 +1,5 @@
 ---
-title: "lab-05"
+title: "Modelling mean streamflow from CAMELS data"
 author: "Will Keenan"
 format: html
 ---
@@ -10,6 +10,7 @@ We start by loading libraries and downloading camels
 
 ```{r}
 #| results: hide
+#| echo: false
 library(tidyverse)
 library(tidymodels)
 library(powerjoin)
@@ -18,12 +19,12 @@ library(vip)
 library(baguette)
 library(ggthemes)
 library(ggplot2)
-
-cwd = getwd()
 ```
 
 ```{r}
 #| results: false
+#| 
+cwd = getwd()
 root <- 'https://zenodo.org/records/15529996/files'
 download.file('https://zenodo.org/records/15529996/files/camels_attributes_v2.0.pdf?download=1',
               glue('{cwd}/data/camels_attributes_v2.0.pdf'),
@@ -40,6 +41,8 @@ camels <- power_full_join(camels ,by = 'gauge_id')
 ```
 ## Question 1
 
+Here we visualize how CAMELS watersheds are distributed around the country and their aridity.
+
 ```{r}
 ispdf <- file.exists(glue('{cwd}/data/camels_attributes_v2.0.pdf'))
 print(paste('pdf is downloaded:', ispdf))
@@ -55,10 +58,13 @@ ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
   annotation_borders("state", colour = "gray50") +
   geom_point(aes(color = q_mean)) +
   scale_color_gradient(low = "pink", high = "dodgerblue") +
+  labs(title='Mean Q (mmd) for CAMELS gauges') +
   ggthemes::theme_map()
 ```
 
 ## Question 2
+
+We model aridity, rainfall, and runoff.
 
 ```{r}
 library(patchwork)
@@ -139,6 +145,7 @@ ggplot(camels, aes(x = aridity, y = p_mean)) +
 ```
 
  ## Question 3
+ Here we use Tidymodels to model mean Q with random forest, neural networks, and linear regression.
  
 ```{r}
  set.seed(123)
@@ -297,14 +304,8 @@ ggplot(rf_data, aes(x = logQmean, y = .pred, colour = aridity)) +
        color = "Aridity")
 ```
 
-## Question 3
-Extend the workflow_set above (which already contains the linear model and the random forest) by adding two more models from the Week 6-1 zoo:
 
-Build an xgboost (engine) regression (mode) model using boost_tree
-Build a neural network model using the nnet engine from the baguette package using the bag_mlp function
-Add both to the workflow set and refit against the resamples
-Compare all four (linear, random forest, xgboost, neural network) with autoplot() and rank_results()
-Which of the four would you move forward with? Justify the pick in 2–3 sentences.
+We extend the workflow_set above (which already contains the linear model and the random forest) by adding two more models.
 
 
 ```{r}
@@ -328,6 +329,8 @@ rank_results(wf, rank_metric = "rsq", select_best = TRUE)
 The neural network has the highest accuracy and best R2. However, it is the least explainable, and only produces marginal gains over the linear regression. For this reason, I would choose linear regression. It is only slightly less accurate than random forest and the neural net and is interpretable.
 
 ## Question 4: Predict mean streamflow from camels data.
+
+This time we consider more predictor variables
 
 ```{r}
 library(skimr)
@@ -438,7 +441,7 @@ rf_model2 <- rand_forest(
   set_mode("regression")
 
 rf_grid <- grid_regular(
-  mtry(range = c(1, 6)), # predictors sampled per split
+  mtry(range = c(1, 5)), # predictors sampled per split
   min_n(range(2, 10))
 )
 
@@ -468,10 +471,9 @@ final |>
   extract_fit_parsnip() |>
   vip::vip()
 ```
-As expected, precipipation is the most important variable. More precipitation, more streamflow. Fraction of forest and slope are also strong predictors. High slopes promote runoff rather than infilltration, and forests transpire a lot of water. Surprisingly, PET is not very important. Fraction of snow was also not a strong predictor, although snow dominated watersheds typically have higher runoff ratios.
+As expected, precipipation is the most important variable. More precipitation, more streamflow. Fraction of forest and slope are also strong predictors. High slopes promote runoff rather than infilltration, and forests transpire a lot of water. Surprisingly, PET is not very important. Fraction of snow was also not a strong predictor, although snow dominated watersheds typically have higher runoff ratios. While there is some spatial autocorrelation, none of these predictors have Moran's I values above 0.5. This combined with the use of spatial CV prevents the model from using geographic proxies rather than true relationships.
 
 ```{r}
-# I already finalized the model when I made final
 final <- workflow() |>
   add_recipe(rec) |>
   add_model(finalize_model(rf_model, best_rf_params))
@@ -479,7 +481,6 @@ final <- workflow() |>
 final <- finalize_workflow(final, best_rf_params)
 final <- last_fit(final, split=cm_split)
 metrics <- final %>% collect_metrics()
-print(metrics)
 
 rmse <- round(exp(metrics$.estimate[1]),2)
 rsq <- round(metrics$.estimate[2],2)
