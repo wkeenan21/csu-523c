@@ -6,11 +6,7 @@ format: html
 
 ## Lab 5
 
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
-
-## Running Code
-
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+We start by loading libraries and downloading camels
 
 ```{r}
 #| results: hide
@@ -26,9 +22,8 @@ library(ggplot2)
 cwd = getwd()
 ```
 
-You can add options to executable code like this
-
 ```{r}
+#| results: false
 root <- 'https://zenodo.org/records/15529996/files'
 download.file('https://zenodo.org/records/15529996/files/camels_attributes_v2.0.pdf?download=1',
               glue('{cwd}/data/camels_attributes_v2.0.pdf'),
@@ -303,7 +298,213 @@ ggplot(rf_data, aes(x = logQmean, y = .pred, colour = aridity)) +
 ```
 
 ## Question 3
+Extend the workflow_set above (which already contains the linear model and the random forest) by adding two more models from the Week 6-1 zoo:
+
+Build an xgboost (engine) regression (mode) model using boost_tree
+Build a neural network model using the nnet engine from the baguette package using the bag_mlp function
+Add both to the workflow set and refit against the resamples
+Compare all four (linear, random forest, xgboost, neural network) with autoplot() and rank_results()
+Which of the four would you move forward with? Justify the pick in 2–3 sentences.
+
 
 ```{r}
+# XGBOOST
+lr <- 1e-3
+xgb_model <- boost_tree() |>
+  set_engine("xgboost") |>
+  set_mode("regression") |>
+  translate()
 
+# NEURAL NET
+mlp_model <- mlp(hidden_units = 32, epochs = 50, activation = 'linear', learn_rate = lr, engine='nnet', mode='regression')
+
+wf <- workflow_set(list(rec), list(lm_model, rf_model, xgb_model, mlp_model)) %>%
+  workflow_map('fit_resamples', resamples = camels_cv) 
+
+autoplot(wf)
+rank_results(wf, rank_metric = "rsq", select_best = TRUE)
 ```
+
+The neural network has the highest accuracy and best R2. However, it is the least explainable, and only produces marginal gains over the linear regression. For this reason, I would choose linear regression. It is only slightly less accurate than random forest and the neural net and is interpretable.
+
+## Question 4: Predict mean streamflow from camels data.
+
+```{r}
+library(skimr)
+set.seed(123)
+
+# pick variables I think might help predict mean q that don't already have mean q. I.e., we shouldn't model mean q with q5 or q95... I'm sure that would be really accurate but it's not realistic to have those variables but not q_mean.
+preds <- c('q_mean', 'p_mean', 'pet_mean', 'aridity', 'frac_snow', 'elev_mean', 'slope_mean', 'frac_forest', 'lai_max')
+cm <- camels |>
+  select(all_of(preds), gauge_id, gauge_lat, gauge_lon)
+
+skim(cm)
+```
+```{r}
+library(ape)
+library(ggcorrplot)
+library(spatialsample)
+library(sf)
+
+dists <- as.matrix(dist(cbind(cm$gauge_lon, cm$gauge_lat)))
+weights <- 1/dists
+diag(weights) <- 0
+
+# look at histograms, r, and morans I
+for (col_name in preds) {
+    hist(cm[[col_name]], main = paste("Histogram of", col_name))
+    
+    moran_result <- Moran.I(cm[[col_name]], weights, na.rm = TRUE)
+    # Extract the observed I value and P-value
+    i <- round(moran_result$observed, 4)
+    p <- round(moran_result$p.value, 4)
+    print(paste(col_name, 'i:', i, 'p:', p))
+}
+
+# Plot the corr matrix
+corr <- round(cor(cm |> select(all_of(preds)), use = "complete.obs"), 2)
+ggcorrplot(corr, hc.order = TRUE, type = "lower", lab = TRUE)
+
+# add log q
+cm <- cm |> 
+  mutate(log_q_mean = log(q_mean))
+
+# split
+cm_split <- initial_split(cm, prop = 0.75)
+cm_train <- training(cm_split)
+cm_test  <- testing(cm_split)
+
+cm_train <- st_as_sf(cm_train, coords = c('gauge_lon', 'gauge_lat'), crs=4326) |>
+  sf::st_set_crs(4326)
+```
+
+```{r}
+rec <-  recipe(log_q_mean ~ p_mean + frac_forest + frac_snow + pet_mean + slope_mean, data = cm_train) %>%
+  # Log transform the predictor variables except p_mean (looks normal enough)
+  step_log(frac_forest, frac_snow, slope_mean, pet_mean, offset = 0.01) %>%
+  # Add an interaction term between aridity and p_mean
+  #step_interact(terms = ~ slope_mean:p_mean) |> 
+  # Drop any rows with missing values in the pred
+  step_naomit(all_predictors(), all_outcomes())
+```
+
+Frac_forest informs the model about transpiration. Slope informs the model about how much water produces runoff rather than is lost to deep groundwater recharge. P_mean, and pet_mean are likely the most important predictors. Aridity is just p_mean/pet_mean so we don't need that. lai_max and elevation are highly collinear with other predictors so I don't want them.
+
+```{r}
+# RF model: handles non-linearity
+rf_model <- rand_forest() %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("regression")
+
+# NEURAL NET: most black box but tons of predictive power
+mlp_model <- mlp(hidden_units = 32, epochs = 50, activation = 'linear', learn_rate = 1E-2, engine='nnet', mode='regression')
+
+# simplest model, captures linear relationships
+lm_model <- linear_reg() %>%
+  # define the engine
+  set_engine("lm") %>%
+  # define the mode
+  set_mode("regression")
+```
+
+```{r}
+simple_cv <- vfold_cv(cm_train, v = 10)
+spatial_cv <- spatialsample::spatial_block_cv(cm_train)
+
+wf <- workflow_set(list(rec), list(rf_model, mlp_model, lm_model)) %>% # , rf_model, mlp_model
+  workflow_map('fit_resamples', resamples = simple_cv)
+
+autoplot(wf)
+rank_results(wf, rank_metric = "rsq", select_best = TRUE)
+```
+
+```{r}
+wf_spatial <- workflow_set(list(rec), list(rf_model, mlp_model, lm_model)) %>% # , rf_model, mlp_model
+  workflow_map('fit_resamples', resamples = spatial_cv)
+autoplot(wf_spatial)
+rank_results(wf_spatial, rank_metric = 'rsq', select_best = TRUE)
+```
+
+In the non-spatial CV, the neural net model was slightly better than the neural network. The best RMSE and R2 was 0.35 and 0.91, respectively. However, this model does not consider spatial autocorrelation and so it's not as good of a representation of the model's true accuracy for data it has not seen. The spatial CV produced slightly lower accuracy, but it's a more "honest" representation of accuracy. The random forest performed slighly better for spatial CV.
+
+```{r}
+# I chose the random forest. It's accuracy is highest
+rf_model2 <- rand_forest(
+    mtry = tune(),
+    min_n = tune(),
+    trees = 500
+  ) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+rf_grid <- grid_regular(
+  mtry(range = c(1, 6)), # predictors sampled per split
+  min_n(range(2, 10))
+)
+
+rf_tuning <- tune_grid(
+  rf_model2,
+  preprocessor = rec, 
+  resamples = spatial_cv,
+  grid = rf_grid,
+  control = control_grid(save_pred = TRUE)
+)
+
+autoplot(rf_tuning)
+show_best(rf_tuning, metric = "rsq")
+
+best_rf_params <- select_best(rf_tuning, metric = "rsq")
+print(best_rf_params)
+```
+The model is most sensitive to the mtry hyperparameter which is the number of predictors that will be randomly sampled at each split. The best value for this parameter is 3. The min_n parameter does not significantly change the model results. Values of 2, 6, and 10 all produced almost the same accuracy.
+
+```{r}
+final <- workflow() |>
+  add_recipe(rec) |>
+  add_model(finalize_model(rf_model, best_rf_params)) |>
+  fit(data = cm_train)
+
+final |>
+  extract_fit_parsnip() |>
+  vip::vip()
+```
+As expected, precipipation is the most important variable. More precipitation, more streamflow. Fraction of forest and slope are also strong predictors. High slopes promote runoff rather than infilltration, and forests transpire a lot of water. Surprisingly, PET is not very important. Fraction of snow was also not a strong predictor, although snow dominated watersheds typically have higher runoff ratios.
+
+```{r}
+# I already finalized the model when I made final
+final <- workflow() |>
+  add_recipe(rec) |>
+  add_model(finalize_model(rf_model, best_rf_params))
+
+final <- finalize_workflow(final, best_rf_params)
+final <- last_fit(final, split=cm_split)
+metrics <- final %>% collect_metrics()
+print(metrics)
+
+rmse <- round(exp(metrics$.estimate[1]),2)
+rsq <- round(metrics$.estimate[2],2)
+
+cm_test <- final %>% 
+  extract_workflow() %>% 
+  augment(new_data = testing(cm_split))
+
+# untransform it. Regular ppl don't want to see log flow.
+
+cm_test$q_mean_pred = exp(cm_test$.pred)
+cm_test |>
+  ggplot(aes(x = q_mean_pred, y = q_mean, color=aridity)) + 
+  scale_color_viridis_c(option = "magma") +
+  geom_point(alpha = 0.5) +
+  geom_abline(lty = 2, color = "red") + 
+  labs(
+    title = "Observed vs. Predicted Q",
+    x = "Predicted Q (mmd)",
+    y = "Observed Q (mmd)",
+    subtitle = paste('RMSE:', rmse, 'mmd', 'R2:', rsq)
+  ) +
+  coord_obs_pred() 
+```
+The model performs very well. An R2 of 0.91 is exceptionally high. The test set performed slightly better than the spatial CV. This is surprising, but it could be due to our hyperparameter tuning or just random chance. The model has very low bias as the residuals are scattered evenly around the 1:1 line. There is one notable outlier where Q is underpredicted.
+
+
+
