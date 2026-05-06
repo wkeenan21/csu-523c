@@ -1,0 +1,290 @@
+---
+title: "lab-06"
+format: html
+editor: visual
+author: 'William Keeenan'
+---
+
+```{r}
+#| echo: False
+#| message: False
+library(tidyverse)
+library(plotly)
+library(dataRetrieval)
+library(climateR)
+library(terra)
+library(exactextractr)
+library(tidymodels)
+library(tsibble)
+library(feasts)
+library(modeltime)
+library(timetk)
+library(tseries)
+```
+
+
+```{r}
+sd <- "2013-01-01"
+ed <- "2025-12-31"
+sdate <- as.Date(sd)
+edate <- as.Date(ed)
+
+poudre_flow <- readNWISdv(
+  siteNumber = "06752260",
+  parameterCd = "00060",
+  startDate   = sd,
+  endDate     = ed
+) |>
+  renameNWISColumns() |>
+  mutate(Date = yearmonth(Date)) |>
+  group_by(Date) |>
+  summarise(Flow = mean(Flow))
+
+basin <- findNLDI(nwis = "06752260", find = "basin")
+
+gm <- getTerraClim(
+  AOI       = basin$basin,
+  var       = c("tmax", "ppt", "srad"),
+  startDate = sdate,
+  endDate   = edate
+) |>
+  unlist() |>
+  rast() |>
+  exact_extract(basin$basin, "mean", progress = FALSE)
+
+historic <- mutate(gm, id = "gridmet") |>
+  pivot_longer(cols = -id) |>
+  mutate(name = sub("^mean\\.", "", name)) |>
+  tidyr::extract(name, into = c("var", "index"), "(.*)_([^_]+$)") |>
+  mutate(index = as.integer(index)) |>
+  mutate(Date = yearmonth(seq.Date(sdate, edate, by = "month")[as.numeric(index)])) |>
+  pivot_wider(id_cols = Date, names_from = var, values_from = value) |>
+  right_join(poudre_flow, by = "Date")
+
+# Validate: should have 132 rows (13 years × 12 months). If fewer, climate data
+# is missing for some months and those flow months were silently dropped.
+stopifnot("Climate join dropped flow months — check GridMET download" = nrow(historic) == 156)
+```
+
+```{r}
+sdate <- as.Date("2027-01-01")
+edate <- as.Date("2033-12-31")
+edate2 <- as.Date("2034-01-01")
+
+maca <- getMACA(
+  AOI      = basin$basin,
+  var      = c("tasmax", "pr", "rsds"),
+  timeRes  = "month",
+  startDate = sdate,
+  endDate   = edate
+) |>
+  unlist() |>
+  rast() |>
+  exact_extract(basin$basin, "mean", progress = FALSE)
+
+future <- mutate(maca, id = "maca") |>
+  pivot_longer(cols = -id) |>
+  mutate(name = sub("^mean\\.", "", name)) |>
+  tidyr::extract(name, into = c("var", "index"), "(.*)_([^_]+$)") |>
+  mutate(index = as.integer(index)) |>
+  mutate(Date = yearmonth(seq.Date(sdate, edate2, by = "month")[as.numeric(index)])) |>
+  pivot_wider(id_cols = Date, names_from = var, values_from = value)
+
+# Rename the 3 climate columns to match GridMET names (Date column stays first)
+stopifnot("Unexpected MACA column count" = ncol(future) == 4)
+names(future)[2:4] <- c("ppt", "srad", "tmax")  # order matches getMACA var request
+future <- mutate(future, tmax = tmax - 273.15)   # Kelvin → °C
+```
+
+```{r}
+# Plot flow timeseries
+hst <- as_tsibble(historic)
+plot_ly(data=hst, x = ~Date, y = ~Flow, type='scatter', mode='lines')
+```
+
+```{r}
+gg_subseries(hst, y=Flow)
+ggtime::gg_season(hst, y=Flow)
+```
+Low flow months of Jan-Mar and Jul-Dec have very little variability relative to total annual flow across the years. Most of the total annual flow comes in May and June from snowmelt. The flow in these months varies dramatically from year to year because of variability in snowpack and snowmelt timing. The seasons in these plots are defined by the 12 months of year.
+
+```{r}
+hst$log_Flow <- log1p(hst$Flow)
+gg_lag(hst, y=log_Flow)
+
+# hard to see things with all months in one plot
+hst_pk <- hst|>
+  filter(month(Date) >=5 & month(Date) <= 9)
+
+gg_lag(hst_pk, y=log_Flow)
+```
+```{r}
+adf.test(hst$log_Flow)
+kpss.test(hst$log_Flow)
+```
+Both tests indicate non-stationarity. The line plot of flow vs time also indicates a decreasing trend in annual flow.
+
+```{r}
+flo_d <- hst |>
+  select(Flow) |>
+  model(STL(Flow ~ season(window = "periodic"))) |>
+  components()
+
+autoplot(flo_d) +
+  labs(title='STL decomposition of Poudre River Flow') +
+  theme_minimal()
+  
+```
+
+There is a clear declining trend in flow since 2013. The seasonal component is due to snowmelt. Low snow years have very small, if any, May/June peak because almost all of the water is diverted for irrigation. The value of the y axis in the seasonality plot is 500 cfs because even in low flow years there is usualy at least a short flow event over 500 cfs.
+
+The remainder reflects whether a year was above or below average snowpack/streamflow. Years with low flow have negative remainder and years with above average flow have high remainder.
+
+```{r}
+ftr <- as_tsibble(future)
+
+# join the historic and old data
+flw <- bind_rows(ftr, historic)
+flw$log_Flow <- log1p(flw$Flow)
+
+# make a log column in hst
+hst$log_flow <- log1p(hst$Flow)
+hst$Date <- as.Date(hst$Date)
+
+splits <- time_series_split(data=hst, date_var = Date, assess= '24 months', cumulative = TRUE)
+train <- training(splits)
+test <- testing(splits)
+
+mods <- list(arima_reg() |> set_engine('auto_arima'),
+             arima_boost(min_n = 2, learn_rate = 0.0015) |> set_engine(engine='auto_arima_xgboost'),
+             prophet_reg() |> set_engine("prophet"),
+             prophet_boost() |> set_engine("prophet_xgboost"),
+             linear_reg() |> set_engine('lm'),
+             nnetar_reg() |> set_engine("nnetar")
+             )
+
+models <- map(mods, ~ fit(.x, log_flow ~ Date + ppt + srad + tmax, data = train))
+
+models_tbl <- as_modeltime_table(models)
+print(models_tbl)
+
+cali <- modeltime_calibrate(models_tbl, test, quiet=FALSE)
+
+modeltime_accuracy(cali) |>
+  arrange(mae)
+
+fcast <- modeltime_forecast(cali, new_data=test, actual_data=hst)
+```
+
+```{r}
+plot_modeltime_forecast(fcast)
+```
+```{r}
+# its too hard to see anything. Limit it to just the best model and zoom in on testing period
+cali |>
+  modeltime_forecast(new_data = test, actual_data = hst) |>
+  # filter to only specific models by their ID
+  filter(is.na(.model_id) | .model_id %in% c(1)) |>
+  # filter to just the test period
+  filter(.index >= min(test$Date)) |>
+  mutate(.value = expm1(.value),
+         .conf_lo = expm1(.conf_lo),
+         .conf_hi = expm1(.conf_hi)) |>
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    .legend_show = TRUE
+  )
+```
+
+That's a pretty good streamflow model... The confidence intervals are very large, but that is appropriate. I don't see any major discontinuities at the boundary.
+
+```{r}
+rf <- cali |>
+  modeltime_refit(data=hst)
+
+ftr$Date <- as.Date(ftr$Date)
+
+rf_fc <- rf |>
+  modeltime_forecast(new_data = ftr, actual_data = hst)
+```
+```{r}
+plot_modeltime_forecast(rf_fc)
+```
+```{r}
+# its too hard to see anything. Limit it to just the best model and zoom in on testing period
+rf |>
+  modeltime_forecast(new_data = ftr, actual_data = hst) |>
+  # filter to only specific models by their ID
+  filter(is.na(.model_id) | .model_id %in% c(1,3)) |>
+  # filter to just the test period
+  filter(.index >= min(ftr$Date)) |>
+  mutate(.value = expm1(.value),
+         .conf_lo = expm1(.conf_lo),
+         .conf_hi = expm1(.conf_hi)) |>
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    .legend_show = TRUE
+  )
+```
+
+The Prophet model has much larger confidence intervals, but ARIMA has higher peak flow predictions. Regular ARIMA has the best accuracy in almost every category and is relatively explainable and constitutionally inexpensive, so I would recommend that one. The model doesn't have any negative flows because I log transformed flow. The MACA climate projections have very low certainty at a monthly timescale. The model just gives users a rough estimate of the future climate so we can test how the changing climate may propogate to other variables, such as streamflow. In this example, snowpack would greatly improve this forecast. Although the model has precipitation and tmax, the relationship between changes to temperature and snowmelt processes is not explicitly accounted for.
+
+```{r}
+upstream <- readNWISdv(
+  siteNumber  = "06746095",
+  parameterCd = "00060",
+  startDate   = "2013-01-01",
+  endDate     = "2025-12-31"
+) |>
+  renameNWISColumns() |>
+  # floor_date returns the 1st of each month as a Date — same type as pf_tbl$date
+  mutate(Date = floor_date(Date, "month")) |>
+  group_by(Date) |>
+  summarise(upstream_flow = mean(Flow, na.rm = TRUE), .groups = "drop") |>
+  mutate(Date = as.Date(Date))
+
+hst2 <- hst |>
+  left_join(upstream, by = "Date") |>
+  drop_na(upstream_flow)
+
+
+splits <- time_series_split(data=hst2, date_var = Date, assess= '24 months', cumulative = TRUE)
+train <- training(splits)
+test <- testing(splits)
+
+mods <- list(arima_reg() |> set_engine('auto_arima'),
+             arima_boost(min_n = 2, learn_rate = 0.0015) |> set_engine(engine='auto_arima_xgboost'),
+             prophet_reg() |> set_engine("prophet"),
+             prophet_boost() |> set_engine("prophet_xgboost"),
+             linear_reg() |> set_engine('lm'),
+             nnetar_reg() |> set_engine("nnetar")
+             )
+
+models <- map(mods, ~ fit(.x, log_flow ~ Date + ppt + srad + tmax + upstream_flow, data = train))
+
+models_tbl <- as_modeltime_table(models)
+print(models_tbl)
+
+cali <- modeltime_calibrate(models_tbl, test, quiet=FALSE)
+
+modeltime_accuracy(cali) |>
+  arrange(mae)
+
+fcast <- modeltime_forecast(cali, new_data=test, actual_data=hst2)
+
+# its too hard to see anything. Limit it to just the best model and zoom in on testing period
+cali |>
+  modeltime_forecast(new_data = test, actual_data = hst2) |>
+  # filter to only specific models by their ID
+  filter(is.na(.model_id) | .model_id %in% c(1)) |>
+  # filter to just the test period
+  filter(.index >= min(test$Date)) |>
+  mutate(.value = expm1(.value),
+         .conf_lo = expm1(.conf_lo),
+         .conf_hi = expm1(.conf_hi)) |>
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    .legend_show = TRUE
+  )
+```
+The rsq is much higher (0.77 compared to 0.71) and the rmse is much lower, indicating upstream flow improved our predictions. 
